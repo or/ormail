@@ -1,3 +1,8 @@
+Work in progress...
+
+A collection of configurations and scripts to sync IMAP servers to a local
+directory and read/send email via (Doom) Emacs.
+
 ** Requirements
 - isync
 #+BEGIN_SRC sh
