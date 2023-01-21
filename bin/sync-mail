@@ -1,0 +1,33 @@
+#!/bin/bash
+
+eval "$(/opt/homebrew/bin/brew shellenv)"
+export PATH="$HOME/bin:/usr/local/bin:$PATH"
+
+export PYENV_ROOT="$HOME/.pyenv"
+command -v pyenv >/dev/null || export PATH="$PYENV_ROOT/bin:$PATH"
+eval "$(pyenv init -)"
+
+script_path=$(readlink "$0")
+if [ -z "$script_path" ]; then
+    script_path="$0"
+fi
+
+cd "$(dirname "$script_path")"
+
+function fail {
+    msg=$1
+    if [ -z "$msg" ]; then
+        msg=":warning: failed"
+    fi
+    echo "$msg"
+    echo "~~~"
+    exit 0
+}
+
+run_archive=$(grep archive ~/.ormailrc | sed -e 's/.*= *//' -e 's/ +$//')
+if [ "$run_archive" == "true" ]; then
+    ./notmuch-archive >/dev/null 2>&1
+fi
+
+mbsync -a >> /tmp/sync-mail.log 2>&1 || fail
+./notmuch-poll
