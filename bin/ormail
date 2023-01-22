@@ -11,14 +11,21 @@
       str/trim
       Integer/parseInt))
 
-(defn- update-db [_opts]
+(defn- update-db [{:keys [output]}]
   (timbre/info "updating database...")
   (process/shell "notmuch new")
-  (let [new-count (notmuch-count "--output=messages tag:new")]
+  (let [new-count (notmuch-count "--output=messages tag:new")
+        xbar? (= output :xbar)]
     (process/shell "notmuch tag -new tag:new")
-    (if (zero? new-count)
-      "no new mail | color=#606060"
-      (str new-count " new mails | color=green"))))
+    (print (if (zero? new-count)
+             "no new mail"
+             (format "%d new mails" new-count)))
+    (println (if xbar?
+               (if (zero? new-count)
+                 " | color=#606060"
+                 " | color=green")
+               ""))
+    nil))
 
 (defn- remove-uid-from-filename [filename]
   (str/replace filename #",U=.*$" ""))
