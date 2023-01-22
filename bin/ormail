@@ -65,9 +65,11 @@
         (process/shell (format "mkdir -p '%s'" archive-filename-directory))
         (process/shell (format "mv '%s' '%s'" filename archive-filename))))))
 
-(defn- sync-mail [opts]
+(defn- sync-mail [{:keys [archive]
+                   :as opts}]
   (timbre/info "syncing mail...")
-  (archive opts)
+  (when archive
+    (archive opts))
   (process/shell "mbsync -a")
   (update-db opts))
 
@@ -129,7 +131,7 @@
 
 Commands:
   help                              show this help
-  sync                              sync the local mail dir with remote IMAP servers
+  sync [--archive]                  sync the local mail dir with remote IMAP servers
   update                            update the notmuch database based on the files in mail dir,
                                     done automatically during sync
   count-unread                      count unread threads
