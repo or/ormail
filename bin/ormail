@@ -1,5 +1,6 @@
 #!/usr/bin/env bb
 (require '[babashka.cli :as cli])
+(require '[babashka.fs :as fs])
 (require '[babashka.process :as process])
 (require '[clojure.string :as str])
 (require '[taoensso.timbre :as timbre])
@@ -19,8 +20,45 @@
       "no new mail | color=#606060"
       (str new-count " new mails | color=green"))))
 
+(defn- remove-uid-from-filename [filename]
+  (str/replace filename #",U=.*$" ""))
+
+(defn- make-unique [filename]
+  (let [counter (atom 0)]
+    (loop [filename filename]
+      (if (fs/exists? filename)
+        (do
+          (swap! counter inc)
+          (recur (str filename "__" @counter)))
+        filename))))
+
+(defn- archive [_opts]
+  (timbre/info "archiving mail...")
+  (process/shell "notmuch tag +archived NOT tag:archived AND NOT tag:unread AND NOT tag:inbox AND date:..31-days")
+  (let [database-path (-> (process/shell {:out :string} "notmuch config get database.path")
+                          :out
+                          str/trim)
+        database-path (str/replace database-path #"/+$" "")
+        database-path-with-slash (str database-path "/")
+        files-to-archive (-> (process/shell
+                              {:out :string}
+                              "notmuch search --output=files tag:archived AND NOT 'folder:/archive\\/.*/'")
+                             :out
+                             (str/split #"\n"))]
+    (doseq [filename (filter #(-> % count pos?) files-to-archive)]
+      (assert (str/starts-with? filename database-path-with-slash)
+              (format "filename not inside database-path (%s): %s" database-path filename))
+      (let [relative-path (str/replace-first filename database-path-with-slash "")
+            relative-path-without-uid (remove-uid-from-filename relative-path)
+            archive-filename (format "%s/archive/%s" database-path relative-path-without-uid)
+            archive-filename (make-unique archive-filename)
+            archive-filename-directory (str/replace archive-filename #"/[^/]*$" "")]
+        (process/shell (format "mkdir -p '%s'" archive-filename-directory))
+        (process/shell (format "mv '%s' '%s'" filename archive-filename))))))
+
 (defn- sync-mail [opts]
   (timbre/info "syncing mail...")
+  (archive opts)
   (process/shell "mbsync -a")
   (update-db opts))
 
@@ -52,12 +90,16 @@
 Commands:
   help                              show this help
   sync                              sync the local mail dir with remote IMAP servers
+  update                            update the notmuch database based on the files in mail dir,
+                                    done automatically during sync
   fix-uids --directory <directory>  fix UID duplication in a mail dir directory
 "))
 
 (def ^:private commands
   {:help help
    :sync sync-mail
+   :archive archive
+   :update update-db
    :fix-uids fix-duplicate-uids})
 
 (defn- main [{:keys [opts]}]
