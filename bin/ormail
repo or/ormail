@@ -5,11 +5,18 @@
 (require '[clojure.string :as str])
 (require '[taoensso.timbre :as timbre])
 
-(defn- notmuch-count [condition]
-  (-> (process/shell {:out :string} (format "notmuch count %s" condition))
+(defn- shell-to-string [command]
+  (-> (process/shell {:out :string} command)
       :out
-      str/trim
-      Integer/parseInt))
+      str/trim))
+
+(defn- shell-to-list [command]
+  (filter (comp not str/blank?)
+          (-> (shell-to-string command)
+              (str/split #"\n"))))
+
+(defn- notmuch-count [condition]
+  (Integer/parseInt (shell-to-string (format "notmuch count %s" condition))))
 
 (defn- update-db [{:keys [xbar]}]
   (timbre/info "updating database...")
@@ -41,17 +48,11 @@
 (defn- archive [_opts]
   (timbre/info "archiving mail...")
   (process/shell "notmuch tag +archived NOT tag:archived AND NOT tag:unread AND NOT tag:inbox AND date:..31-days")
-  (let [database-path (-> (process/shell {:out :string} "notmuch config get database.path")
-                          :out
-                          str/trim)
+  (let [database-path (shell-to-string "notmuch config get database.path")
         database-path (str/replace database-path #"/+$" "")
         database-path-with-slash (str database-path "/")
-        files-to-archive (-> (process/shell
-                              {:out :string}
-                              "notmuch search --output=files tag:archived AND NOT 'folder:/archive\\/.*/'")
-                             :out
-                             (str/split #"\n"))]
-    (doseq [filename (filter #(-> % count pos?) files-to-archive)]
+        files-to-archive (shell-to-list "notmuch search --output=files tag:archived AND NOT 'folder:/archive\\/.*/'")]
+    (doseq [filename files-to-archive]
       (assert (str/starts-with? filename database-path-with-slash)
               (format "filename not inside database-path (%s): %s" database-path filename))
       (let [relative-path (str/replace-first filename database-path-with-slash "")
@@ -70,10 +71,7 @@
 
 (defn- fix-duplicate-uids [{:keys [directory]}]
   (assert directory)
-  (let [files (-> (process/shell {:out :string}
-                                 (format "ls -1 '%s'" directory))
-                  :out
-                  (str/split #"\n"))
+  (let [files (shell-to-list (format "ls -1 '%s'" directory))
         uids (into {}
                    (keep (fn [filename]
                            (when-let [[_ uid] (re-find #",U=(\d+):" filename)]
