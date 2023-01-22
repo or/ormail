@@ -11,21 +11,20 @@
       str/trim
       Integer/parseInt))
 
-(defn- update-db [{:keys [output]}]
+(defn- update-db [{:keys [xbar]}]
   (timbre/info "updating database...")
   (process/shell "notmuch new")
-  (let [new-count (notmuch-count "--output=messages tag:new")
-        xbar? (= output :xbar)]
+  (let [new-count (notmuch-count "--output=messages tag:new")]
     (process/shell "notmuch tag -new tag:new")
     (print (if (zero? new-count)
              "no new mail"
              (format "%d new mails" new-count)))
-    (println (if xbar?
-               (if (zero? new-count)
-                 " | color=#606060"
-                 " | color=green")
-               ""))
-    nil))
+    (when xbar
+      (print (format " | color=%s"
+                     (if (zero? new-count)
+                       "#606060"
+                       "green"))))
+    (println)))
 
 (defn- remove-uid-from-filename [filename]
   (str/replace filename #",U=.*$" ""))
@@ -89,6 +88,18 @@
             (let [fixed-filename (remove-uid-from-filename filename)]
               (process/shell (format "mv '%s/%s' '%s/%s'" directory filename directory fixed-filename)))))))))
 
+(defn- count-unread [{:keys [xbar]}]
+  (let [unread-count (notmuch-count "--output=threads tag:unread")]
+    (print (if (pos? unread-count)
+             (format ":incoming_envelope: %d threads" unread-count)
+             "no unread mail"))
+    (when xbar
+      (print (format " | color=%s"
+                     (if (pos? unread-count)
+                       "red"
+                       "#707070"))))
+    (println)))
+
 (defn- help [_opts]
   (println "Usage:
     ormail --help
@@ -99,6 +110,7 @@ Commands:
   sync                              sync the local mail dir with remote IMAP servers
   update                            update the notmuch database based on the files in mail dir,
                                     done automatically during sync
+  count-unread                      count unread threads
   fix-uids --directory <directory>  fix UID duplication in a mail dir directory
 "))
 
@@ -107,6 +119,7 @@ Commands:
    :sync sync-mail
    :archive archive
    :update update-db
+   :count-unread count-unread
    :fix-uids fix-duplicate-uids})
 
 (defn- main [{:keys [opts]}]
@@ -119,10 +132,8 @@ Commands:
 
 (main (cli/parse-args *command-line-args*
                       {:coerce {:command :keyword
-                                :output :keyword
+                                :xbar :boolean
                                 :help :boolean}
-                       :validate {:command commands
-                                  :output #{:xbar
-                                            :default}}
+                       :validate {:command commands}
                        :exec-args {:output :default}
                        :args->opts [:command]}))
