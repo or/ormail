@@ -20,7 +20,7 @@
 (defn- notmuch-count [condition]
   (Integer/parseInt (shell-to-string (format "notmuch count %s" condition))))
 
-(defn- update-db [{:keys [xbar]}]
+(defn- command-update [{:keys [xbar]}]
   (timbre/info "updating database...")
   (process/shell "notmuch new")
   (let [new-count (notmuch-count "--output=messages tag:new")]
@@ -47,7 +47,7 @@
           (recur (str filename "__" @counter)))
         filename))))
 
-(defn- archive [_opts]
+(defn- command-archive [_opts]
   (timbre/info "archiving mail...")
   (process/shell "notmuch tag +archived NOT tag:archived AND NOT tag:unread AND NOT tag:inbox AND date:..31-days")
   (let [database-path (shell-to-string "notmuch config get database.path")
@@ -65,15 +65,15 @@
         (process/shell (format "mkdir -p '%s'" archive-filename-directory))
         (process/shell (format "mv '%s' '%s'" filename archive-filename))))))
 
-(defn- sync-mail [{:keys [archive]
-                   :as opts}]
+(defn- command-sync [{:keys [archive]
+                      :as opts}]
   (timbre/info "syncing mail...")
   (when archive
-    (archive opts))
+    (command-archive opts))
   (process/shell "mbsync -a")
-  (update-db opts))
+  (command-update opts))
 
-(defn- fix-duplicate-uids [{:keys [directory]}]
+(defn- command-fix-duplicate-uids [{:keys [directory]}]
   (assert directory)
   (let [files (shell-to-list (format "ls -1 '%s'" directory))
         uids (into {}
@@ -90,7 +90,7 @@
             (let [fixed-filename (remove-uid-from-filename filename)]
               (process/shell (format "mv '%s/%s' '%s/%s'" directory filename directory fixed-filename)))))))))
 
-(defn- count-unread [{:keys [xbar]}]
+(defn- command-count-unread [{:keys [xbar]}]
   (let [unread-count (notmuch-count "--output=threads tag:unread")]
     (print (if (pos? unread-count)
              (format ":incoming_envelope: %d threads" unread-count)
@@ -116,7 +116,7 @@
           false)
         true))))
 
-(defn- addresses [{:keys [exclude pattern]}]
+(defn- command-addresses [{:keys [exclude pattern]}]
   (->> (shell-to-list "notmuch address NOT tag:spam'")
        (remove (partial exclude-address (when exclude
                                           (re-pattern exclude))))
@@ -124,7 +124,7 @@
        (str/join "\n")
        println))
 
-(defn- help [_opts]
+(defn- command-help [_opts]
   (println "Usage:
     ormail --help
     ormail <command> [args...]
@@ -140,13 +140,13 @@ Commands:
 "))
 
 (def ^:private commands
-  {:help help
-   :sync sync-mail
-   :archive archive
-   :update update-db
-   :count-unread count-unread
-   :addresses addresses
-   :fix-uids fix-duplicate-uids})
+  {:help command-help
+   :sync command-sync
+   :archive command-archive
+   :update command-update
+   :count-unread command-count-unread
+   :addresses command-addresses
+   :fix-uids command-fix-duplicate-uids})
 
 (defn- main [{:keys [opts]}]
   (let [config-file (str (fs/expand-home "~/.ormail.edn"))
@@ -157,7 +157,7 @@ Commands:
         config-opts (get config command)]
     (if (and show-help?
              (not command))
-      (help opts)
+      (command-help opts)
       (apply (get commands command) [(merge config-opts opts)]))))
 
 (main (cli/parse-args *command-line-args*
