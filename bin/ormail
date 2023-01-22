@@ -1,0 +1,79 @@
+#!/usr/bin/env bb
+(require '[babashka.cli :as cli])
+(require '[babashka.process :as process])
+(require '[clojure.string :as str])
+(require '[taoensso.timbre :as timbre])
+
+(defn- notmuch-count [condition]
+  (-> (process/shell {:out :string} (format "notmuch count %s" condition))
+      :out
+      str/trim
+      Integer/parseInt))
+
+(defn- update-db [_opts]
+  (timbre/info "updating database...")
+  (process/shell "notmuch new")
+  (let [new-count (notmuch-count "--output=messages tag:new")]
+    (process/shell "notmuch tag -new tag:new")
+    (if (zero? new-count)
+      "no new mail | color=#606060"
+      (str new-count " new mails | color=green"))))
+
+(defn- sync-mail [opts]
+  (timbre/info "syncing mail...")
+  (process/shell "mbsync -a")
+  (update-db opts))
+
+(defn- fix-duplicate-uids [{:keys [directory]}]
+  (assert directory)
+  (let [files (-> (process/shell {:out :string}
+                                 (format "ls -1 '%s'" directory))
+                  :out
+                  (str/split #"\n"))
+        uids (into {}
+                   (keep (fn [filename]
+                           (when-let [[_ uid] (re-find #",U=(\d+):" filename)]
+                             [filename uid]))
+                         files))
+        grouped-by-uid (group-by uids files)]
+    (doseq [[uid filenames] grouped-by-uid]
+      (let [filenames-to-fix (drop 1 filenames)]
+        (when (pos? (count filenames-to-fix))
+          (timbre/info "fixing" (count filenames-to-fix) "message(s) duplicating UID" uid)
+          (doseq [filename filenames-to-fix]
+            (let [fixed-filename (remove-uid-from-filename filename)]
+              (process/shell (format "mv '%s/%s' '%s/%s'" directory filename directory fixed-filename)))))))))
+
+(defn- help [_opts]
+  (println "Usage:
+    ormail --help
+    ormail <command> [args...]
+
+Commands:
+  help                              show this help
+  sync                              sync the local mail dir with remote IMAP servers
+  fix-uids --directory <directory>  fix UID duplication in a mail dir directory
+"))
+
+(def ^:private commands
+  {:help help
+   :sync sync-mail
+   :fix-uids fix-duplicate-uids})
+
+(defn- main [{:keys [opts]}]
+  (let [command (:command opts)
+        show-help? (:help opts)]
+    (if (and show-help?
+             (not command))
+      (help opts)
+      (apply (get commands command) [opts]))))
+
+(main (cli/parse-args *command-line-args*
+                      {:coerce {:command :keyword
+                                :output :keyword
+                                :help :boolean}
+                       :validate {:command commands
+                                  :output #{:xbar
+                                            :default}}
+                       :exec-args {:output :default}
+                       :args->opts [:command]}))
