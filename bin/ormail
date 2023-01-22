@@ -7,6 +7,10 @@
             [clojure.string :as str]
             [taoensso.timbre :as timbre]))
 
+(defn- log-info [{:keys [quiet]} message]
+  (when-not quiet
+    (timbre/info message)))
+
 (defn- shell-to-string [command]
   (-> (process/shell {:out :string} command)
       :out
@@ -17,14 +21,21 @@
           (-> (shell-to-string command)
               (str/split #"\n"))))
 
+(defn- shell [{:keys [quiet]} command]
+  (process/shell (when quiet
+                   {:out :string
+                    :err :string})
+                 command))
+
 (defn- notmuch-count [condition]
   (Integer/parseInt (shell-to-string (format "notmuch count %s" condition))))
 
-(defn- command-update [{:keys [xbar]}]
-  (timbre/info "updating database...")
-  (process/shell "notmuch new")
+(defn- command-update [{:keys [xbar]
+                        :as opts}]
+  (log-info opts "updating database...")
+  (shell opts "notmuch new")
   (let [new-count (notmuch-count "--output=messages tag:new")]
-    (process/shell "notmuch tag -new tag:new")
+    (shell opts "notmuch tag -new tag:new")
     (print (if (zero? new-count)
              "no new mail"
              (format "%d new mails" new-count)))
@@ -47,9 +58,9 @@
           (recur (str filename "__" @counter)))
         filename))))
 
-(defn- command-archive [_opts]
-  (timbre/info "archiving mail...")
-  (process/shell "notmuch tag +archived NOT tag:archived AND NOT tag:unread AND NOT tag:inbox AND date:..31-days")
+(defn- command-archive [opts]
+  (log-info opts "archiving mail...")
+  (shell opts "notmuch tag +archived NOT tag:archived AND NOT tag:unread AND NOT tag:inbox AND date:..31-days")
   (let [database-path (shell-to-string "notmuch config get database.path")
         database-path (str/replace database-path #"/+$" "")
         database-path-with-slash (str database-path "/")
@@ -62,18 +73,19 @@
             archive-filename (format "%s/archive/%s" database-path relative-path-without-uid)
             archive-filename (make-unique archive-filename)
             archive-filename-directory (str/replace archive-filename #"/[^/]*$" "")]
-        (process/shell (format "mkdir -p '%s'" archive-filename-directory))
-        (process/shell (format "mv '%s' '%s'" filename archive-filename))))))
+        (shell opts (format "mkdir -p '%s'" archive-filename-directory))
+        (shell opts (format "mv '%s' '%s'" filename archive-filename))))))
 
 (defn- command-sync [{:keys [archive]
                       :as opts}]
-  (timbre/info "syncing mail...")
+  (log-info opts "syncing mail...")
   (when archive
     (command-archive opts))
-  (process/shell "mbsync -a")
+  (shell opts "mbsync -a")
   (command-update opts))
 
-(defn- command-fix-duplicate-uids [{:keys [directory]}]
+(defn- command-fix-duplicate-uids [{:keys [directory]
+                                    :as opts}]
   (assert directory)
   (let [files (shell-to-list (format "ls -1 '%s'" directory))
         uids (into {}
@@ -85,10 +97,10 @@
     (doseq [[uid filenames] grouped-by-uid]
       (let [filenames-to-fix (drop 1 filenames)]
         (when (pos? (count filenames-to-fix))
-          (timbre/info "fixing" (count filenames-to-fix) "message(s) duplicating UID" uid)
+          (log-info opts (format "fixing %d message(s) duplicating UID %s" (count filenames-to-fix) uid))
           (doseq [filename filenames-to-fix]
             (let [fixed-filename (remove-uid-from-filename filename)]
-              (process/shell (format "mv '%s/%s' '%s/%s'" directory filename directory fixed-filename)))))))))
+              (shell opts (format "mv '%s/%s' '%s/%s'" directory filename directory fixed-filename)))))))))
 
 (defn- command-count-unread [{:keys [xbar]}]
   (let [unread-count (notmuch-count "--output=threads tag:unread")]
@@ -137,6 +149,10 @@ Commands:
   count-unread                      count unread threads
   addresses [--exclude <regexp>]    list all addresses, exclude those matching the given pattern
   fix-uids --directory <directory>  fix UID duplication in a mail dir directory
+
+General options:
+  --quiet                           print only the necessary output
+  --xbar                            output responses in a format suitable for xbar plugins, implies --quiet
 "))
 
 (def ^:private commands
@@ -152,6 +168,8 @@ Commands:
   (let [config-file (str (fs/expand-home "~/.ormail.edn"))
         config (when (fs/exists? config-file)
                  (edn/read-string (slurp config-file)))
+        opts (cond-> opts
+               (:xbar opts) (assoc :quiet true))
         command (:command opts)
         show-help? (:help opts)
         config-opts (get config command)]
@@ -164,6 +182,7 @@ Commands:
                       {:coerce {:command :keyword
                                 :xbar :boolean
                                 :help :boolean
+                                :quiet :boolean
                                 :exclude :string
                                 :pattern [:string]}
                        :validate {:command commands}
