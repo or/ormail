@@ -1,10 +1,11 @@
 #!/usr/bin/env bb
-(require '[babashka.cli :as cli])
-(require '[babashka.fs :as fs])
-(require '[babashka.process :as process])
-(require '[clojure.edn :as edn])
-(require '[clojure.string :as str])
-(require '[taoensso.timbre :as timbre])
+(ns ormail
+  (:require [babashka.cli :as cli]
+            [babashka.fs :as fs]
+            [babashka.process :as process]
+            [clojure.edn :as edn]
+            [clojure.string :as str]
+            [taoensso.timbre :as timbre]))
 
 (defn- shell-to-string [command]
   (-> (process/shell {:out :string} command)
