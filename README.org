@@ -1,23 +1,11 @@
-Work in progress...
-
 A collection of configurations and scripts to sync IMAP servers to a local
 directory and read/send email via (Doom) Emacs.
 
 ** Requirements
-- isync
-#+BEGIN_SRC sh
-$ brew install isync
-#+END_SRC
-- notmuch
-#+BEGIN_SRC sh
-$ brew install notmuch
-#+END_SRC
-- [[https://github.com/matryer/xbar][xbar]] [[https://github.com/matryer/xbar/releases/tag/v2.0.32-beta][v2.0-32 beta]] at time of writing (before that it was called [[https://github.com/matryer/bitbar][BitBar]] and I used [[https://github.com/matryer/bitbar/releases/tag/v2.0.0-beta10][v2.0 beta 10]])
-- psutil
-#+begin_src sh
-pip install psutil
-#+end_src
-
+- isync (can be installed via brew)
+- notmuch (can be installed via brew)
+- babashka (can be installed via brew)
+- [[https://github.com/matryer/xbar][xbar]] [[https://github.com/matryer/xbar/releases/tag/v2.1.7-beta][v2.1.7 beta]] at time of writing
 ** Installation
 *** xbar
 Symlink the files in xbar-plugins into =~/Library/Application
@@ -26,40 +14,5 @@ Support/xbar/plugins= and start xbar.
 - symlink =lib/ormail= into your doom directory and add =(load!
   "ormail/ormail")= to your =config.el=
 *** isync
-**** Retrieving credentials via macOS Keychain (recommended)
-- use the =UseKeychain= setting, see [[https://www.mankier.com/1/mbsync][mbsync man page]] for details
-- more secure than the GPG method below
-
-**** Retrieving credentials via GPG (discouraged)
-- =pinentry-mac= for GPG to ask for the password when decrypting
-  =~/.authinfo.gpg=
-#+BEGIN_SRC sh
-$ brew install pinentry-mac
-#+END_SRC
-- anyone with access to your system while you are logged in will be able to run
-  =gpg -d ~/.authinfo.gpg= to retrieve the password
-
-*** Alternative setup with offlineimap
-Previously I used offlineimap, but isync is faster and allows the more secure
-Keychain access. However, offlineimap can still be used like before, see the git
-history to see what changes might be necessary.
-
-*** Migrate from offlineimap
-1. Backup your mail directory
-2. Delete your mail directory
-3. Set up mbsync with the same mail directory
-4. Run mbsync, which fetches all mails again
-5. Run notmuch-poll, everything should work as expected afterwards, files
-   previously archived will have the offlineimap naming scheme, but notmuch
-   isn't fussy about that
-
-** Options
-If you want to archive all email that is older than 30 days, then you can
-add this to =~/.ormailrc=:
-#+BEGIN_QUOTE ini
-[general]
-archive = true
-#+END_QUOTE
-
-Archiving will move old emails to a local folder, so mbsync will delete
-them on the server on the next sync.
+The best way is to retrieve credentials via macOS Keychain, use the
+=UseKeychain= setting for that, see [[https://www.mankier.com/1/mbsync][mbsync man page]] for details.
