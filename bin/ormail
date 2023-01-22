@@ -2,6 +2,7 @@
 (require '[babashka.cli :as cli])
 (require '[babashka.fs :as fs])
 (require '[babashka.process :as process])
+(require '[clojure.edn :as edn])
 (require '[clojure.string :as str])
 (require '[taoensso.timbre :as timbre])
 
@@ -98,6 +99,28 @@
                        "#707070"))))
     (println)))
 
+(defn- exclude-address [exclude address]
+  (when exclude
+    (re-find exclude address)))
+
+(defn- filter-address [pattern address]
+  (let [pattern (map str/lower-case pattern)
+        address (str/lower-case address)]
+    (loop [[word & rest] pattern]
+      (if word
+        (if (str/includes? address word)
+          (recur rest)
+          false)
+        true))))
+
+(defn- addresses [{:keys [exclude pattern]}]
+  (->> (shell-to-list "notmuch address NOT tag:spam'")
+       (remove (partial exclude-address (when exclude
+                                          (re-pattern exclude))))
+       (filter (partial filter-address pattern))
+       (str/join "\n")
+       println))
+
 (defn- help [_opts]
   (println "Usage:
     ormail --help
@@ -109,6 +132,7 @@ Commands:
   update                            update the notmuch database based on the files in mail dir,
                                     done automatically during sync
   count-unread                      count unread threads
+  addresses [--exclude <regexp>]    list all addresses, exclude those matching the given pattern
   fix-uids --directory <directory>  fix UID duplication in a mail dir directory
 "))
 
@@ -118,20 +142,26 @@ Commands:
    :archive archive
    :update update-db
    :count-unread count-unread
+   :addresses addresses
    :fix-uids fix-duplicate-uids})
 
 (defn- main [{:keys [opts]}]
-  (let [command (:command opts)
-        show-help? (:help opts)]
+  (let [config-file (str (fs/expand-home "~/.ormail.edn"))
+        config (when (fs/exists? config-file)
+                 (edn/read-string (slurp config-file)))
+        command (:command opts)
+        show-help? (:help opts)
+        config-opts (get config command)]
     (if (and show-help?
              (not command))
       (help opts)
-      (apply (get commands command) [opts]))))
+      (apply (get commands command) [(merge config-opts opts)]))))
 
 (main (cli/parse-args *command-line-args*
                       {:coerce {:command :keyword
                                 :xbar :boolean
-                                :help :boolean}
+                                :help :boolean
+                                :exclude :string
+                                :pattern [:string]}
                        :validate {:command commands}
-                       :exec-args {:output :default}
-                       :args->opts [:command]}))
+                       :args->opts [:command :pattern]}))
