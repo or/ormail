@@ -1,4 +1,4 @@
-#!/usr/bin/env bb
+#!/opt/homebrew/bin/bb
 (ns ormail
   (:require [babashka.cli :as cli]
             [babashka.fs :as fs]
@@ -6,6 +6,12 @@
             [clojure.edn :as edn]
             [clojure.string :as str]
             [taoensso.timbre :as timbre]))
+
+(def ^:private silenced?-file
+  "/tmp/silence-mail")
+
+(defn- silenced? []
+  (fs/exists? silenced?-file))
 
 (defn- log-info [{:keys [quiet]} message]
   (when-not quiet
@@ -36,14 +42,16 @@
   (shell opts "notmuch new")
   (let [new-count (notmuch-count "--output=messages tag:new")]
     (shell opts "notmuch tag -new tag:new")
-    (print (if (zero? new-count)
-             "no new mail"
-             (format "%d new mails" new-count)))
+    (print (cond
+             (silenced?) "silenced"
+             (zero? new-count) "no new mail"
+             :else (format "%d new mails" new-count)))
     (when xbar
       (print (format " | color=%s"
-                     (if (zero? new-count)
-                       "#606060"
-                       "green"))))
+                     (cond
+                       (silenced?) "#606060"
+                       (zero? new-count) "#606060"
+                       :else "green"))))
     (println)))
 
 (defn- remove-uid-from-filename [filename]
@@ -104,15 +112,22 @@
 
 (defn- command-count-unread [{:keys [xbar]}]
   (let [unread-count (notmuch-count "--output=threads tag:unread")]
-    (print (if (pos? unread-count)
-             (format ":incoming_envelope: %d threads" unread-count)
-             "no unread mail"))
-    (when xbar
-      (print (format " | color=%s"
-                     (if (pos? unread-count)
-                       "red"
-                       "#707070"))))
-    (println)))
+    (print (cond
+             (silenced?) "silenced"
+             (pos? unread-count) (format ":incoming_envelope: %d threads" unread-count)
+             :else "no unread mail"))
+    (if xbar
+      (do
+        (println (format " | color=%s"
+                         (cond
+                           (silenced?) "#606060"
+                           (pos? unread-count) "red"
+                           :else "#707070")))
+        (println "---")
+        (println (if (silenced?)
+                   (format "unsilence | color=green shell=\"%s\" param1=toggle-xbar" *file*)
+                   (format "silence | color=red shell=\"%s\" param1=toggle-xbar" *file*))))
+      (println))))
 
 (defn- exclude-address [exclude address]
   (when exclude
@@ -136,6 +151,18 @@
        (str/join "\n")
        println))
 
+(defn- command-xbar-on? [_opts]
+  (println (if (silenced?)
+             "no"
+             "yes"))
+  nil)
+
+(defn- command-toggle-xbar [_opts]
+  (if (silenced?)
+    (process/shell "rm" silenced?-file)
+    (process/shell "touch" silenced?-file))
+  nil)
+
 (defn- command-help [_opts]
   (println "Usage:
     ormail --help
@@ -148,6 +175,9 @@ Commands:
                                     done automatically during sync
   count-unread                      count unread threads
   addresses [--exclude <regexp>]    list all addresses, exclude those matching the given pattern
+  xbar-on?                          returns \"yes\" or \"no\", depending on whether notifications
+                                    are turned on or off
+  toggle-xbar                       toggle whether email notifications are shown in xbar
   fix-uids --directory <directory>  fix UID duplication in a mail dir directory
 
 General options:
@@ -162,6 +192,8 @@ General options:
    :update command-update
    :count-unread command-count-unread
    :addresses command-addresses
+   :xbar-on? command-xbar-on?
+   :toggle-xbar command-toggle-xbar
    :fix-uids command-fix-duplicate-uids})
 
 (defn- main [{:keys [opts]}]
