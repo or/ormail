@@ -5,13 +5,33 @@
             [babashka.process :as process]
             [clojure.edn :as edn]
             [clojure.string :as str]
-            [taoensso.timbre :as timbre]))
+            [taoensso.timbre :as timbre])
+  (:import [java.time Duration LocalDateTime ZoneId]))
 
 (def ^:private silenced?-file
-  "/tmp/silence-mail")
+  "/tmp/ormail-silence")
+
+(def ^:private last-sync-file
+  "/tmp/ormail-last-sync")
 
 (defn- silenced? []
   (fs/exists? silenced?-file))
+
+(defn- more-than-n-processes-running? [pattern n]
+  (let [lines (-> (process/process "ps aux")
+                  (process/process (format "grep -E '%s'" pattern))
+                  (process/process {:out :string} "grep -v grep")
+                  deref
+                  :out
+                  str/trim
+                  (str/split #"\n"))]
+    (-> (remove str/blank? lines)
+        count
+        (> n))))
+
+(defn- sync-running? []
+  (or (more-than-n-processes-running? "ormail +(sync|update)" 0)
+      (more-than-n-processes-running? "ormail +xbar" 1)))
 
 (defn- log-info [{:keys [quiet]} message]
   (when-not quiet
@@ -36,23 +56,9 @@
 (defn- notmuch-count [condition]
   (Integer/parseInt (shell-to-string (format "notmuch count %s" condition))))
 
-(defn- command-update [{:keys [xbar]
-                        :as opts}]
+(defn- command-update [opts]
   (log-info opts "updating database...")
-  (shell opts "notmuch new")
-  (let [new-count (notmuch-count "--output=messages tag:new")]
-    (shell opts "notmuch tag -new tag:new")
-    (print (cond
-             (silenced?) "silenced"
-             (zero? new-count) "no new mail"
-             :else (format "%d new mails" new-count)))
-    (when xbar
-      (print (format " | color=%s"
-                     (cond
-                       (silenced?) "#606060"
-                       (zero? new-count) "#606060"
-                       :else "green"))))
-    (println)))
+  (shell opts "notmuch new"))
 
 (defn- remove-uid-from-filename [filename]
   (str/replace filename #",U=.*$" ""))
@@ -90,7 +96,9 @@
   (when archive
     (command-archive opts))
   (shell opts "mbsync -a")
-  (command-update opts))
+  (command-update opts)
+  (process/shell {:out :string} "touch" last-sync-file)
+  nil)
 
 (defn- command-fix-duplicate-uids [{:keys [directory]
                                     :as opts}]
@@ -110,24 +118,38 @@
             (let [fixed-filename (remove-uid-from-filename filename)]
               (shell opts (format "mv '%s/%s' '%s/%s'" directory filename directory fixed-filename)))))))))
 
-(defn- command-count-unread [{:keys [xbar]}]
-  (let [unread-count (notmuch-count "--output=threads tag:unread")]
-    (print (cond
-             (silenced?) "silenced"
-             (pos? unread-count) (format ":incoming_envelope: %d threads" unread-count)
-             :else "no unread mail"))
-    (if xbar
-      (do
-        (println (format " | color=%s"
-                         (cond
-                           (silenced?) "#606060"
-                           (pos? unread-count) "red"
-                           :else "#707070")))
-        (println "---")
-        (println (if (silenced?)
-                   (format "unsilence | color=green shell=\"%s\" param1=toggle-xbar" *file*)
-                   (format "silence | color=red shell=\"%s\" param1=toggle-xbar" *file*))))
-      (println))))
+(defn- last-sync-time []
+  (when (fs/exists? last-sync-file)
+    (-> (fs/last-modified-time last-sync-file)
+        .toInstant
+        (LocalDateTime/ofInstant (ZoneId/systemDefault)))))
+
+(defn- minutes-since-last-sync []
+  (when-let [last-sync-time* (last-sync-time)]
+    (let [now (LocalDateTime/now)]
+      (.toMinutes (Duration/between last-sync-time* now)))))
+
+(defn- sync-needed? [{:keys [sync-every-n-minutes]
+                      :or {sync-every-n-minutes 15}}]
+  (let [minutes-since-last-sync* (minutes-since-last-sync)]
+    (or (nil? minutes-since-last-sync*)
+        (<= sync-every-n-minutes minutes-since-last-sync*))))
+
+(defn- command-xbar [opts]
+  (if (sync-running?)
+    (println "syncing... | color=#707070")
+    (do
+      (when (sync-needed? opts)
+        (command-sync opts))
+      (let [unread-count (notmuch-count "--output=threads tag:unread")]
+        (println (cond
+                   (silenced?) "silenced | color=#606060"
+                   (pos? unread-count) (format ":incoming_envelope: %d threads | color=red" unread-count)
+                   :else "no unread mail | color=#707070")))))
+  (println "---")
+  (println (if (silenced?)
+             (format "unsilence | color=green shell=\"%s\" param1=toggle-xbar" *file*)
+             (format "silence | color=red shell=\"%s\" param1=toggle-xbar" *file*))))
 
 (defn- exclude-address [exclude address]
   (when exclude
@@ -173,16 +195,15 @@ Commands:
   sync [--archive]                  sync the local mail dir with remote IMAP servers
   update                            update the notmuch database based on the files in mail dir,
                                     done automatically during sync
-  count-unread                      count unread threads
   addresses [--exclude <regexp>]    list all addresses, exclude those matching the given pattern
   xbar-on?                          returns \"yes\" or \"no\", depending on whether notifications
                                     are turned on or off
   toggle-xbar                       toggle whether email notifications are shown in xbar
+  xbar                              act as an xbar plugin
   fix-uids --directory <directory>  fix UID duplication in a mail dir directory
 
 General options:
   --quiet                           print only the necessary output
-  --xbar                            output responses in a format suitable for xbar plugins, implies --quiet
 "))
 
 (def ^:private commands
@@ -190,19 +211,19 @@ General options:
    :sync command-sync
    :archive command-archive
    :update command-update
-   :count-unread command-count-unread
    :addresses command-addresses
    :xbar-on? command-xbar-on?
    :toggle-xbar command-toggle-xbar
+   :xbar command-xbar
    :fix-uids command-fix-duplicate-uids})
 
 (defn- main [{:keys [opts]}]
   (let [config-file (str (fs/expand-home "~/.ormail.edn"))
         config (when (fs/exists? config-file)
                  (edn/read-string (slurp config-file)))
-        opts (cond-> opts
-               (:xbar opts) (assoc :quiet true))
         command (:command opts)
+        opts (cond-> opts
+               (= command :xbar) (assoc :quiet true))
         show-help? (:help opts)
         config-opts (get config command)]
     (if (and show-help?
