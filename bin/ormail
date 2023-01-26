@@ -14,6 +14,14 @@
 (def ^:private last-sync-file
   "/tmp/ormail-last-sync")
 
+(defn- notmuch-path [opts]
+  (or (-> opts :config :notmuch-path)
+      "/opt/homebrew/bin/notmuch"))
+
+(defn- mbsync-path [opts]
+  (or (-> opts :config :mbsync-path)
+      "/opt/homebrew/bin/mbysync"))
+
 (defn- silenced? []
   (fs/exists? silenced?-file))
 
@@ -53,12 +61,12 @@
                     :err :string})
                  command))
 
-(defn- notmuch-count [condition]
-  (Integer/parseInt (shell-to-string (format "notmuch count %s" condition))))
+(defn- notmuch-count [opts condition]
+  (Integer/parseInt (shell-to-string (format "'%s' count %s" (notmuch-path opts) condition))))
 
 (defn- command-update [opts]
   (log-info opts "updating database...")
-  (shell opts "notmuch new"))
+  (shell opts (format "'%s' new" (notmuch-path opts))))
 
 (defn- remove-uid-from-filename [filename]
   (str/replace filename #",U=.*$" ""))
@@ -74,11 +82,14 @@
 
 (defn- command-archive [opts]
   (log-info opts "archiving mail...")
-  (shell opts "notmuch tag +archived NOT tag:archived AND NOT tag:unread AND NOT tag:inbox AND date:..31-days")
-  (let [database-path (shell-to-string "notmuch config get database.path")
+  (shell opts (format "'%s' tag +archived NOT tag:archived AND NOT tag:unread AND NOT tag:inbox AND date:..31-days"
+                      (notmuch-path opts)))
+  (let [database-path (shell-to-string (format "'%s' config get database.path"
+                                               (notmuch-path opts)))
         database-path (str/replace database-path #"/+$" "")
         database-path-with-slash (str database-path "/")
-        files-to-archive (shell-to-list "notmuch search --output=files tag:archived AND NOT 'folder:/archive\\/.*/'")]
+        files-to-archive (shell-to-list (format "'%s' search --output=files tag:archived AND NOT 'folder:/archive\\/.*/'"
+                                                (notmuch-path opts)))]
     (doseq [filename files-to-archive]
       (assert (str/starts-with? filename database-path-with-slash)
               (format "filename not inside database-path (%s): %s" database-path filename))
@@ -95,7 +106,7 @@
   (log-info opts "syncing mail...")
   (when archive
     (command-archive opts))
-  (shell opts "mbsync -a")
+  (shell opts (format "'%s' -a" (mbsync-path opts)))
   (command-update opts)
   (process/shell {:out :string} "touch" last-sync-file)
   nil)
@@ -141,7 +152,7 @@
     (do
       (when (sync-needed? opts)
         (command-sync opts))
-      (let [unread-count (notmuch-count "--output=threads tag:unread")]
+      (let [unread-count (notmuch-count opts "--output=threads tag:unread")]
         (println (cond
                    (silenced?) "silenced | color=#606060"
                    (pos? unread-count) (format ":incoming_envelope: %d threads | color=red" unread-count)
@@ -149,7 +160,8 @@
   (println "---")
   (println (if (silenced?)
              (format "unsilence | color=green shell=\"%s\" param1=toggle-xbar" *file*)
-             (format "silence | color=red shell=\"%s\" param1=toggle-xbar" *file*))))
+             (format "silence | color=red shell=\"%s\" param1=toggle-xbar" *file*)))
+  (println (format "sync | color=yellow shell=\"%s\" param1=sync" *file*)))
 
 (defn- exclude-address [exclude address]
   (when exclude
@@ -165,8 +177,9 @@
           false)
         true))))
 
-(defn- command-addresses [{:keys [exclude pattern]}]
-  (->> (shell-to-list "notmuch address NOT tag:spam'")
+(defn- command-addresses [{:keys [exclude pattern]
+                           :as opts}]
+  (->> (shell-to-list (format "'%s' address NOT tag:spam'" (notmuch-path opts)))
        (remove (partial exclude-address (when exclude
                                           (re-pattern exclude))))
        (filter (partial filter-address pattern))
@@ -225,7 +238,8 @@ General options:
         opts (cond-> opts
                (= command :xbar) (assoc :quiet true))
         show-help? (:help opts)
-        config-opts (get config command)]
+        config-opts (get config command)
+        opts (assoc opts :config config)]
     (if (and show-help?
              (not command))
       (command-help opts)
