@@ -24,6 +24,16 @@
   (notmuch-tree "tag:inbox or tag:unread")
   (bind-map-change-major-mode-after-body-hook))
 
+(defun ormail/inbox-and-unread-work ()
+  (interactive)
+  (notmuch-tree "(tag:inbox OR tag:unread) AND tag:work")
+  (bind-map-change-major-mode-after-body-hook))
+
+(defun ormail/inbox-and-unread-personal ()
+  (interactive)
+  (notmuch-tree "(tag:inbox OR tag:unread) AND NOT tag:work")
+  (bind-map-change-major-mode-after-body-hook))
+
 (defun ormail/unread ()
   (interactive)
   (notmuch-tree "tag:unread")

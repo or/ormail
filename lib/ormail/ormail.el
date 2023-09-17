@@ -32,6 +32,8 @@
                    (:prefix-map ("m" . "mail")
                     :desc "New mail"           "n"     'ormail/new-mail
                     :desc "Inbox"              "i"     'ormail/inbox-and-unread
+                    :desc "Inbox work"         "w"     'ormail/inbox-and-unread-work
+                    :desc "Inbox personal"     "p"     'ormail/inbox-and-unread-personal
                     :desc "Unread"             "u"     'ormail/unread
                     :desc "Jump search"        "j"     'ormail/jump-search
                     )))
