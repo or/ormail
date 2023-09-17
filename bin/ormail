@@ -11,6 +11,9 @@
 (def ^:private silenced?-file
   "/tmp/ormail-silence")
 
+(def ^:private vacation-mode?-file
+  "/tmp/ormail-vacation-mode")
+
 (def ^:private last-sync-file
   "/tmp/ormail-last-sync")
 
@@ -24,6 +27,9 @@
 
 (defn- silenced? []
   (fs/exists? silenced?-file))
+
+(defn- vacation-mode? []
+  (fs/exists? vacation-mode?-file))
 
 (defn- more-than-n-processes-running? [pattern n]
   (let [lines (-> (process/process "ps aux")
@@ -154,15 +160,20 @@
     (do
       (when (sync-needed? opts)
         (command-sync opts))
-      (let [unread-count (notmuch-count opts "--output=threads tag:unread")]
+      (let [unread-count (notmuch-count opts
+                                        (cond-> "--output=threads tag:unread"
+                                          (vacation-mode?) (str " AND NOT tag:work")))]
         (println (cond
                    (silenced?) "silenced | color=#606060"
                    (pos? unread-count) (format ":incoming_envelope: %d threads | color=red" unread-count)
                    :else "no unread mail | color=#707070")))))
   (println "---")
   (println (if (silenced?)
-             (format "unsilence | color=green shell=\"%s\" param1=toggle-xbar" *file*)
-             (format "silence | color=red shell=\"%s\" param1=toggle-xbar" *file*)))
+             (format "unsilence | color=green shell=\"%s\" param1=toggle-silenced " *file*)
+             (format "silence | color=red shell=\"%s\" param1=toggle-silenced " *file*)))
+  (println (if (vacation-mode?)
+             (format "work | color=green shell=\"%s\" param1=toggle-vacation-mode " *file*)
+             (format "vacation | color=orange shell=\"%s\" param1=toggle-vacation-mode " *file*)))
   (println (format "sync | color=yellow shell=\"%s\" param1=sync" *file*)))
 
 (defn- exclude-address [exclude address]
@@ -194,10 +205,16 @@
              "yes"))
   nil)
 
-(defn- command-toggle-xbar [_opts]
+(defn- command-toggle-silenced [_opts]
   (if (silenced?)
     (process/shell "rm" silenced?-file)
     (process/shell "touch" silenced?-file))
+  nil)
+
+(defn- command-toggle-vacation-mode [_opts]
+  (if (vacation-mode?)
+    (process/shell "rm" vacation-mode?-file)
+    (process/shell "touch" vacation-mode?-file))
   nil)
 
 (defn- command-help [_opts]
@@ -213,7 +230,8 @@ Commands:
   addresses [--exclude <regexp>]    list all addresses, exclude those matching the given pattern
   xbar-on?                          returns \"yes\" or \"no\", depending on whether notifications
                                     are turned on or off
-  toggle-xbar                       toggle whether email notifications are shown in xbar
+  toggle-silenced                   toggle whether email notifications are shown in xbar
+  toggle-vacation-mode              toggle vacation mode, where work emails are filtered
   xbar                              act as an xbar plugin
   fix-uids --directory <directory>  fix UID duplication in a mail dir directory
 
@@ -228,7 +246,8 @@ General options:
    :update command-update
    :addresses command-addresses
    :xbar-on? command-xbar-on?
-   :toggle-xbar command-toggle-xbar
+   :toggle-silenced command-toggle-silenced
+   :toggle-vacation-mode command-toggle-vacation-mode
    :xbar command-xbar
    :fix-uids command-fix-duplicate-uids})
 
