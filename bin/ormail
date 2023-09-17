@@ -56,10 +56,11 @@
               (str/split #"\n"))))
 
 (defn- shell [{:keys [quiet]} command]
-  (process/shell (when quiet
-                   {:out :string
-                    :err :string})
-                 command))
+  (let [{:keys [proc]} (process/shell (when quiet
+                                        {:out :string
+                                         :err :string})
+                                      command)]
+    (.waitFor proc 5 java.util.concurrent.TimeUnit/MINUTES)))
 
 (defn- notmuch-count [opts condition]
   (Integer/parseInt (shell-to-string (format "'%s' count %s" (notmuch-path opts) condition))))
